@@ -1,0 +1,53 @@
+*** Settings ***
+Library           AWSLibrary
+Library           DateTime
+Library           Collections
+
+*** Variables ***
+${AWS_ACCESS_KEY}       YOUR_AWS_ACCESS_KEY
+${AWS_SECRET_KEY}       YOUR_AWS_SECRET_KEY
+${REGION_NAME}          YOUR_AWS_REGION
+${SOURCE_BUCKET}        source-bucket
+${DESTINATION_BUCKET}   destination-bucket
+${FILE_KEY}             example.txt
+
+*** Test Cases ***
+Test File Transfer
+    # Set AWS credentials and region
+    Initialize AWS    region=${REGION_NAME}    access_key=${AWS_ACCESS_KEY}    secret_key=${AWS_SECRET_KEY}
+
+    # Upload a test file to the source bucket
+    Put S3 Object    bucket=${SOURCE_BUCKET}    key=${FILE_KEY}    body=Test data
+
+    # Add tag "TRANSFERED" to the test object in the source bucket
+    Set S3 Object Tags    bucket=${SOURCE_BUCKET}    key=${FILE_KEY}    tags=TRANSFERED:yes
+
+    # Trigger the Lambda function with a sample event
+    ${event}=    Create Dictionary    source_bucket=${SOURCE_BUCKET}    destination_bucket=${DESTINATION_BUCKET}    file_key=${FILE_KEY}
+    ${result}=   Lambda Execute Function    lambda_function.lambda_handler    ${event}
+
+    # Verify the response
+    Should Be Equal    ${result['statusCode']}    200
+    Should Be Equal    ${result['body']}          File transfer completed successfully.
+
+    # Optionally, verify if the file was transferred to the destination bucket
+    ${keys}=    Get S3 Object List    bucket=${DESTINATION_BUCKET}
+    List Should Contain Value    ${keys}    ${FILE_KEY}
+
+    # Verify if the transferred object in the destination bucket has the tag "TRANSFERED"
+    ${tags}=    Get S3 Object Tags    bucket=${DESTINATION_BUCKET}    key=${FILE_KEY}
+    Dictionary Should Contain Value    ${tags}    TRANSFERED    yes
+
+    # Calculate the date 7 days ago
+    ${seven_days_ago}=    Get Current Date    result_format=%Y-%m-%dT%H:%M:%S.%fZ    time_shift=-7days
+
+    # Get the modified date of the object in the source bucket
+    ${object_metadata}=    Get S3 Object Metadata    bucket=${SOURCE_BUCKET}    key=${FILE_KEY}
+    ${modified_date}=    Get From Dictionary    ${object_metadata}    LastModified
+
+    # Verify if the object in the source bucket was copied to the destination bucket after 7 days
+    Run Keyword If    ${modified_date} < ${seven_days_ago}
+        Copy S3 Object    source_bucket=${SOURCE_BUCKET}    source_key=${FILE_KEY}    destination_bucket=${DESTINATION_BUCKET}    destination_key=${FILE_KEY}
+
+    # Delete the object from the source bucket after it's copied
+    Delete S3 Object    bucket=${SOURCE_BUCKET}    key=${FILE_KEY}
